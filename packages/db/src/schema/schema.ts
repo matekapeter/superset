@@ -688,3 +688,71 @@ export const sessionHosts = pgTable(
 
 export type InsertSessionHost = typeof sessionHosts.$inferInsert;
 export type SelectSessionHost = typeof sessionHosts.$inferSelect;
+
+// Agent telemetry - statusline snapshots from Claude Code agents
+export const agentTelemetry = pgTable(
+	"agent_telemetry",
+	{
+		id: uuid().primaryKey().defaultRandom(),
+		userId: uuid("user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+		organizationId: uuid("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+
+		// Session identification
+		sessionId: text("session_id").notNull(),
+		agentName: text("agent_name"),
+
+		// Model info
+		modelId: text("model_id"),
+		modelDisplayName: text("model_display_name"),
+
+		// Cost metrics (cumulative snapshot)
+		totalCostUsd: real("total_cost_usd"),
+		totalDurationMs: integer("total_duration_ms"),
+		totalApiDurationMs: integer("total_api_duration_ms"),
+		totalLinesAdded: integer("total_lines_added"),
+		totalLinesRemoved: integer("total_lines_removed"),
+
+		// Token usage (cumulative snapshot)
+		totalInputTokens: integer("total_input_tokens"),
+		totalOutputTokens: integer("total_output_tokens"),
+		contextWindowSize: integer("context_window_size"),
+		usedPercentage: real("used_percentage"),
+
+		// Current turn token details
+		currentInputTokens: integer("current_input_tokens"),
+		currentOutputTokens: integer("current_output_tokens"),
+		currentCacheCreationTokens: integer("current_cache_creation_tokens"),
+		currentCacheReadTokens: integer("current_cache_read_tokens"),
+
+		// Rate limits
+		fiveHourUsedPercentage: real("five_hour_used_percentage"),
+		sevenDayUsedPercentage: real("seven_day_used_percentage"),
+
+		// Workspace context
+		workingDir: text("working_dir"),
+		projectDir: text("project_dir"),
+
+		// Metadata
+		claudeCodeVersion: text("claude_code_version"),
+		exceeds200kTokens: boolean("exceeds_200k_tokens"),
+
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(table) => [
+		index("agent_telemetry_user_org_idx").on(
+			table.userId,
+			table.organizationId,
+		),
+		index("agent_telemetry_session_idx").on(table.sessionId),
+		index("agent_telemetry_created_at_idx").on(table.createdAt),
+	],
+);
+
+export type InsertAgentTelemetry = typeof agentTelemetry.$inferInsert;
+export type SelectAgentTelemetry = typeof agentTelemetry.$inferSelect;

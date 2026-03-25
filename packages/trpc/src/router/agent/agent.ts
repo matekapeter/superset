@@ -1,8 +1,12 @@
-import { dbWs } from "@superset/db/client";
-import { agentCommands, commandStatusValues } from "@superset/db/schema";
+import { db, dbWs } from "@superset/db/client";
+import {
+	agentCommands,
+	agentTelemetry,
+	commandStatusValues,
+} from "@superset/db/schema";
 import { getCurrentTxid } from "@superset/db/utils";
 import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { protectedProcedure } from "../../trpc";
 
@@ -62,5 +66,94 @@ export const agentRouter = {
 			});
 
 			return result;
+		}),
+
+	/**
+	 * Get the latest telemetry snapshot for each active session in the org
+	 */
+	getActiveSessions: protectedProcedure.query(async ({ ctx }) => {
+		const organizationId = ctx.session.session.activeOrganizationId;
+		if (!organizationId) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: "No active organization selected",
+			});
+		}
+
+		const sessions = await db.execute(sql`
+			SELECT DISTINCT ON (${agentTelemetry.sessionId}) *
+			FROM ${agentTelemetry}
+			WHERE ${agentTelemetry.organizationId} = ${organizationId}
+			ORDER BY ${agentTelemetry.sessionId}, ${agentTelemetry.createdAt} DESC
+		`);
+
+		return { sessions: sessions.rows };
+	}),
+
+	/**
+	 * Get telemetry time-series for a specific session
+	 */
+	getSessionTelemetry: protectedProcedure
+		.input(
+			z.object({
+				sessionId: z.string(),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const organizationId = ctx.session.session.activeOrganizationId;
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "No active organization selected",
+				});
+			}
+
+			const rows = await db
+				.select()
+				.from(agentTelemetry)
+				.where(
+					and(
+						eq(agentTelemetry.organizationId, organizationId),
+						eq(agentTelemetry.sessionId, input.sessionId),
+					),
+				)
+				.orderBy(desc(agentTelemetry.createdAt));
+
+			return { telemetry: rows };
+		}),
+
+	/**
+	 * Get aggregated agent metrics for the org over a time period
+	 */
+	getAgentMetrics: protectedProcedure
+		.input(
+			z.object({
+				days: z.number().min(1).max(90).default(7),
+			}),
+		)
+		.query(async ({ ctx, input }) => {
+			const organizationId = ctx.session.session.activeOrganizationId;
+			if (!organizationId) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "No active organization selected",
+				});
+			}
+
+			const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000);
+
+			const result = await db.execute(sql`
+				SELECT
+					COUNT(DISTINCT ${agentTelemetry.sessionId})::int AS session_count,
+					MAX(${agentTelemetry.totalCostUsd}) AS total_cost_usd,
+					SUM(${agentTelemetry.currentInputTokens})::bigint AS total_input_tokens,
+					SUM(${agentTelemetry.currentOutputTokens})::bigint AS total_output_tokens,
+					COUNT(*)::int AS telemetry_count
+				FROM ${agentTelemetry}
+				WHERE ${agentTelemetry.organizationId} = ${organizationId}
+				AND ${agentTelemetry.createdAt} >= ${since}
+			`);
+
+			return { metrics: result.rows[0] ?? null };
 		}),
 } satisfies TRPCRouterRecord;
