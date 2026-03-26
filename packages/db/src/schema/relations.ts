@@ -15,7 +15,6 @@ import {
 } from "./github";
 import {
 	agentCommands,
-	agentTelemetry,
 	chatSessions,
 	devicePresence,
 	integrationConnections,
@@ -49,7 +48,6 @@ export const usersRelations = relations(users, ({ many }) => ({
 	v2UsersDevices: many(v2UsersDevices),
 	v2Workspaces: many(v2Workspaces),
 	agentCommands: many(agentCommands),
-	agentTelemetry: many(agentTelemetry),
 	chatSessions: many(chatSessions),
 }));
 
@@ -88,7 +86,6 @@ export const organizationsRelations = relations(organizations, ({ many }) => ({
 	githubPullRequests: many(githubPullRequests),
 	devicePresence: many(devicePresence),
 	agentCommands: many(agentCommands),
-	agentTelemetry: many(agentTelemetry),
 	chatSessions: many(chatSessions),
 }));
 
@@ -239,17 +236,6 @@ export const agentCommandsRelations = relations(agentCommands, ({ one }) => ({
 		fields: [agentCommands.parentCommandId],
 		references: [agentCommands.id],
 		relationName: "parentCommand",
-	}),
-}));
-
-export const agentTelemetryRelations = relations(agentTelemetry, ({ one }) => ({
-	user: one(users, {
-		fields: [agentTelemetry.userId],
-		references: [users.id],
-	}),
-	organization: one(organizations, {
-		fields: [agentTelemetry.organizationId],
-		references: [organizations.id],
 	}),
 }));
 
