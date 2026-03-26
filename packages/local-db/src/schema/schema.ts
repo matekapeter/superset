@@ -386,3 +386,52 @@ export const browserHistory = sqliteTable(
 
 export type InsertBrowserHistory = typeof browserHistory.$inferInsert;
 export type SelectBrowserHistory = typeof browserHistory.$inferSelect;
+
+/**
+ * Agent telemetry table - stores per-session metrics from Claude Code statusline.
+ * Written externally by a bash script via sqlite3 CLI, read by the desktop app.
+ * Append-only: each statusline tick produces a new row for time-series analysis.
+ */
+export const agentTelemetry = sqliteTable(
+	"agent_telemetry",
+	{
+		id: text("id")
+			.primaryKey()
+			.$defaultFn(() => uuidv4()),
+		sessionId: text("session_id").notNull(),
+		agentName: text("agent_name"),
+		modelId: text("model_id"),
+		modelDisplayName: text("model_display_name"),
+		totalCostUsd: text("total_cost_usd"),
+		totalDurationMs: integer("total_duration_ms"),
+		totalApiDurationMs: integer("total_api_duration_ms"),
+		totalLinesAdded: integer("total_lines_added"),
+		totalLinesRemoved: integer("total_lines_removed"),
+		totalInputTokens: integer("total_input_tokens"),
+		totalOutputTokens: integer("total_output_tokens"),
+		contextWindowSize: integer("context_window_size"),
+		usedPercentage: text("used_percentage"),
+		currentInputTokens: integer("current_input_tokens"),
+		currentOutputTokens: integer("current_output_tokens"),
+		cacheCreationInputTokens: integer("cache_creation_input_tokens"),
+		cacheReadInputTokens: integer("cache_read_input_tokens"),
+		fiveHourUsedPercentage: text("five_hour_used_percentage"),
+		sevenDayUsedPercentage: text("seven_day_used_percentage"),
+		currentDir: text("current_dir"),
+		projectDir: text("project_dir"),
+		version: text("version"),
+		exceeds200kTokens: integer("exceeds_200k_tokens", { mode: "boolean" }),
+		transcriptPath: text("transcript_path"),
+		recordedAt: integer("recorded_at")
+			.notNull()
+			.$defaultFn(() => Date.now()),
+	},
+	(table) => [
+		index("agent_telemetry_session_id_idx").on(table.sessionId),
+		index("agent_telemetry_recorded_at_idx").on(table.recordedAt),
+		index("agent_telemetry_project_dir_idx").on(table.projectDir),
+	],
+);
+
+export type InsertAgentTelemetry = typeof agentTelemetry.$inferInsert;
+export type SelectAgentTelemetry = typeof agentTelemetry.$inferSelect;
