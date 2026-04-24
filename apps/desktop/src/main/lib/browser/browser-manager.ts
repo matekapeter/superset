@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { app, clipboard, Menu, shell, webContents } from "electron";
+import { clipboard, Menu, webContents } from "electron";
+import { safeOpenExternal } from "main/lib/safe-url";
 
 interface ConsoleEntry {
 	level: "log" | "warn" | "error" | "info" | "debug";
@@ -113,56 +114,6 @@ class BrowserManager extends EventEmitter {
 		wc.openDevTools({ mode: "detach" });
 	}
 
-	async getDevToolsUrl(browserPaneId: string): Promise<string | null> {
-		const wc = this.getWebContents(browserPaneId);
-		if (!wc) return null;
-
-		const cdpPort = app.commandLine.getSwitchValue("remote-debugging-port");
-		if (!cdpPort) return null;
-
-		try {
-			const targetUrl = wc.getURL();
-			const res = await fetch(`http://127.0.0.1:${cdpPort}/json`);
-			const targets = (await res.json()) as Array<{
-				id: string;
-				url: string;
-				type: string;
-				webSocketDebuggerUrl?: string;
-			}>;
-
-			const webviewTargets = targets.filter(
-				(t) => t.type === "page" || t.type === "webview",
-			);
-
-			// Strategy 1: Exact URL match
-			let target = webviewTargets.find((t) => t.url === targetUrl);
-
-			// Strategy 2: Match ignoring trailing slash / fragment differences
-			if (!target && targetUrl) {
-				const normalize = (u: string) =>
-					u.replace(/\/?(#.*)?$/, "").toLowerCase();
-				const normalizedTarget = normalize(targetUrl);
-				target = webviewTargets.find(
-					(t) => normalize(t.url) === normalizedTarget,
-				);
-			}
-
-			// Strategy 3: If only one webview target exists, use it
-			if (!target) {
-				const webviewOnly = webviewTargets.filter((t) => t.type === "webview");
-				if (webviewOnly.length === 1) {
-					target = webviewOnly[0];
-				}
-			}
-
-			if (!target) return null;
-
-			return `http://127.0.0.1:${cdpPort}/devtools/inspector.html?ws=127.0.0.1:${cdpPort}/devtools/page/${target.id}`;
-		} catch {
-			return null;
-		}
-	}
-
 	private setupContextMenu(paneId: string, wc: Electron.WebContents): void {
 		const handler = (
 			_event: Electron.Event,
@@ -176,7 +127,9 @@ class BrowserManager extends EventEmitter {
 				menuItems.push(
 					{
 						label: "Open Link in Default Browser",
-						click: () => shell.openExternal(linkURL),
+						click: () => {
+							void safeOpenExternal(linkURL);
+						},
 					},
 					{
 						label: "Open Link as New Split",
@@ -244,7 +197,7 @@ class BrowserManager extends EventEmitter {
 						label: "Open Page in Default Browser",
 						click: () => {
 							if (pageURL && pageURL !== "about:blank") {
-								shell.openExternal(pageURL);
+								void safeOpenExternal(pageURL);
 							}
 						},
 						enabled: !!pageURL && pageURL !== "about:blank",

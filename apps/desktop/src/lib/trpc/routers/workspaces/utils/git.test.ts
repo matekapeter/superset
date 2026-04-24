@@ -15,6 +15,8 @@ import {
 	createWorktree,
 	getCurrentBranch,
 	hasUnpushedCommits,
+	isUnbornHeadError,
+	parsePorcelainStatusV2,
 	parsePrUrl,
 } from "./git";
 
@@ -439,6 +441,89 @@ describe("createWorktree hook tolerance", () => {
 			createWorktree(repoPath, "feature/existing-path", worktreePath, "HEAD"),
 		).rejects.toThrow("already exists");
 	}, 10_000);
+
+	test("works with remote-tracking ref as start point (no-track prevents upstream)", async () => {
+		// Set up a "remote" repo with a commit, then clone it so we have origin/<branch> refs
+		const originPath = join(TEST_DIR, "worktree-notrack-origin");
+		mkdirSync(originPath, { recursive: true });
+		execSync("git init -b main", { cwd: originPath, stdio: "ignore" });
+		execSync("git config user.email 'test@test.com'", {
+			cwd: originPath,
+			stdio: "ignore",
+		});
+		execSync("git config user.name 'Test'", {
+			cwd: originPath,
+			stdio: "ignore",
+		});
+		writeFileSync(join(originPath, "README.md"), "# test\n");
+		execSync("git add . && git commit -m 'init'", {
+			cwd: originPath,
+			stdio: "ignore",
+		});
+
+		const clonePath = join(TEST_DIR, "worktree-notrack-clone");
+		execSync(`git clone "${originPath}" "${clonePath}"`, {
+			stdio: "ignore",
+		});
+		execSync("git config user.email 'test@test.com'", {
+			cwd: clonePath,
+			stdio: "ignore",
+		});
+		execSync("git config user.name 'Test'", {
+			cwd: clonePath,
+			stdio: "ignore",
+		});
+
+		const worktreePath = join(TEST_DIR, "worktree-notrack-wt");
+		await createWorktree(
+			clonePath,
+			"feature/no-track-test",
+			worktreePath,
+			"origin/main",
+		);
+
+		expect(existsSync(worktreePath)).toBe(true);
+
+		// Verify the new branch does NOT track origin/main
+		const trackingResult = execSync(
+			"git config --get branch.feature/no-track-test.remote 2>&1 || true",
+			{ cwd: worktreePath },
+		)
+			.toString()
+			.trim();
+		expect(trackingResult).toBe("");
+	}, 15_000);
+
+	test("works with a branch name containing slashes as start point", async () => {
+		// Reproduces #3448: createWorktree previously appended ^{commit} to the
+		// start point, which can fail with "fatal: invalid reference" when the ref
+		// is not locally resolvable with that suffix. Using --no-track avoids this.
+		const repoPath = createTestRepo("worktree-slash-branch");
+		seedCommit(repoPath);
+
+		// Create a branch with slashes (like feat/workstreams-view)
+		execSync("git checkout -b feat/workstreams-view", {
+			cwd: repoPath,
+			stdio: "ignore",
+		});
+		execSync("git checkout -", { cwd: repoPath, stdio: "ignore" });
+
+		const worktreePath = join(TEST_DIR, "worktree-slash-branch-wt");
+		await createWorktree(
+			repoPath,
+			"feature/new-workspace",
+			worktreePath,
+			"feat/workstreams-view",
+		);
+
+		expect(existsSync(worktreePath)).toBe(true);
+		const currentBranch = execSync("git rev-parse --abbrev-ref HEAD", {
+			cwd: worktreePath,
+		})
+			.toString()
+			.trim();
+		expect(currentBranch).toBe("feature/new-workspace");
+	}, 10_000);
 });
 
 describe("getCurrentBranch", () => {
@@ -501,6 +586,129 @@ describe("getCurrentBranch", () => {
 				rmSync(repoPath, { recursive: true, force: true });
 			}
 		}
+	});
+});
+
+describe("parsePorcelainStatusV2", () => {
+	test("parses branch headers for unborn branches with upstream tracking", () => {
+		const status = parsePorcelainStatusV2(
+			[
+				"# branch.oid (initial)",
+				"# branch.head feature/gone-fix",
+				"# branch.upstream origin/feature/gone-fix",
+				"# branch.ab +0 -0",
+				"? path with spaces.txt",
+			].join("\0"),
+		);
+
+		expect(status.current).toBe("feature/gone-fix");
+		expect(status.tracking).toBe("origin/feature/gone-fix");
+		expect(status.ahead).toBe(0);
+		expect(status.behind).toBe(0);
+		expect(status.not_added).toEqual(["path with spaces.txt"]);
+		expect(status.files).toEqual([
+			{
+				path: "path with spaces.txt",
+				from: "path with spaces.txt",
+				index: "?",
+				working_dir: "?",
+			},
+		]);
+	});
+
+	test("parses rename and modified entries from porcelain v2 output", () => {
+		const status = parsePorcelainStatusV2(
+			[
+				"# branch.oid abcdef1234567890",
+				"# branch.head feature/rename",
+				"# branch.upstream origin/feature/rename",
+				"# branch.ab +2 -3",
+				"2 R. N... 100644 100644 100644 43dd47ea691c90a5fa7827892c70241913351963 43dd47ea691c90a5fa7827892c70241913351963 R100 new.txt",
+				"old.txt",
+				"1 .M N... 100644 100644 100644 43dd47ea691c90a5fa7827892c70241913351963 43dd47ea691c90a5fa7827892c70241913351963 edited.txt",
+			].join("\0"),
+		);
+
+		expect(status.current).toBe("feature/rename");
+		expect(status.tracking).toBe("origin/feature/rename");
+		expect(status.ahead).toBe(2);
+		expect(status.behind).toBe(3);
+		expect(status.renamed).toEqual([{ from: "old.txt", to: "new.txt" }]);
+		expect(status.files).toEqual([
+			{
+				path: "new.txt",
+				from: "old.txt",
+				index: "R",
+				working_dir: " ",
+			},
+			{
+				path: "edited.txt",
+				from: "edited.txt",
+				index: " ",
+				working_dir: "M",
+			},
+		]);
+		expect(status.staged).toEqual(["new.txt"]);
+		expect(status.modified).toEqual(["edited.txt"]);
+	});
+
+	test("parses unmerged conflict entries from porcelain v2 output", () => {
+		const status = parsePorcelainStatusV2(
+			[
+				"# branch.oid abcdef1234567890",
+				"# branch.head main",
+				"u UU N... 100644 100644 100644 100644 43dd47ea691c90a5fa7827892c70241913351963 43dd47ea691c90a5fa7827892c70241913351963 43dd47ea691c90a5fa7827892c70241913351963 conflict.txt",
+			].join("\0"),
+		);
+
+		expect(status.current).toBe("main");
+		expect(status.conflicted).toEqual(["conflict.txt"]);
+		expect(status.files).toEqual([
+			{
+				path: "conflict.txt",
+				from: "conflict.txt",
+				index: "U",
+				working_dir: "U",
+			},
+		]);
+	});
+
+	test("marks all porcelain v2 unmerged records as conflicted", () => {
+		const status = parsePorcelainStatusV2(
+			[
+				"# branch.oid abcdef1234567890",
+				"# branch.head main",
+				"u AA N... 100644 100644 100644 100644 43dd47ea691c90a5fa7827892c70241913351963 43dd47ea691c90a5fa7827892c70241913351963 43dd47ea691c90a5fa7827892c70241913351963 both-added.txt",
+			].join("\0"),
+		);
+
+		expect(status.conflicted).toEqual(["both-added.txt"]);
+		expect(status.files).toEqual([
+			{
+				path: "both-added.txt",
+				from: "both-added.txt",
+				index: "A",
+				working_dir: "A",
+			},
+		]);
+	});
+});
+
+describe("isUnbornHeadError", () => {
+	test("matches the standard unborn HEAD rev-parse failure", () => {
+		expect(
+			isUnbornHeadError(
+				new Error(
+					"fatal: ambiguous argument 'HEAD': unknown revision or path not in the working tree.",
+				),
+			),
+		).toBe(true);
+	});
+
+	test("does not hide unrelated git failures", () => {
+		expect(isUnbornHeadError(new Error("fatal: not a git repository"))).toBe(
+			false,
+		);
 	});
 });
 

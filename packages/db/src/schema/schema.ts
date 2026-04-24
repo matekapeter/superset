@@ -1,3 +1,5 @@
+import type { ResolvedAgentConfig } from "@superset/shared/agent-settings";
+import { sql } from "drizzle-orm";
 import {
 	boolean,
 	index,
@@ -12,16 +14,17 @@ import {
 	uniqueIndex,
 	uuid,
 } from "drizzle-orm/pg-core";
-
 import { organizations, users } from "./auth";
 import {
+	automationRunStatusValues,
+	automationSessionKindValues,
 	commandStatusValues,
 	deviceTypeValues,
 	integrationProviderValues,
 	taskPriorityValues,
 	taskStatusEnumValues,
-	v2DeviceTypeValues,
-	v2UsersDeviceRoleValues,
+	v2ClientTypeValues,
+	v2UsersHostRoleValues,
 	workspaceTypeValues,
 } from "./enums";
 import { githubRepositories } from "./github";
@@ -35,12 +38,12 @@ export const integrationProvider = pgEnum(
 	integrationProviderValues,
 );
 export const deviceType = pgEnum("device_type", deviceTypeValues);
-export const v2DeviceType = pgEnum("v2_device_type", v2DeviceTypeValues);
-export const v2UsersDeviceRole = pgEnum(
-	"v2_users_device_role",
-	v2UsersDeviceRoleValues,
-);
 export const commandStatus = pgEnum("command_status", commandStatusValues);
+export const v2ClientType = pgEnum("v2_client_type", v2ClientTypeValues);
+export const v2UsersHostRole = pgEnum(
+	"v2_users_host_role",
+	v2UsersHostRoleValues,
+);
 
 export const taskStatuses = pgTable(
 	"task_statuses",
@@ -386,9 +389,11 @@ export const v2Projects = pgTable(
 			.references(() => organizations.id, { onDelete: "cascade" }),
 		name: text().notNull(),
 		slug: text().notNull(),
-		githubRepositoryId: uuid("github_repository_id")
-			.notNull()
-			.references(() => githubRepositories.id, { onDelete: "restrict" }),
+		repoCloneUrl: text("repo_clone_url"),
+		githubRepositoryId: uuid("github_repository_id").references(
+			() => githubRepositories.id,
+			{ onDelete: "set null" },
+		),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -400,22 +405,28 @@ export const v2Projects = pgTable(
 	(table) => [
 		index("v2_projects_organization_id_idx").on(table.organizationId),
 		unique("v2_projects_org_slug_unique").on(table.organizationId, table.slug),
+		// One project per repo URL per org. NULLs don't collide (PG default)
+		// so empty-mode projects without a remote can still be created.
+		uniqueIndex("v2_projects_org_repo_clone_url_unique").on(
+			table.organizationId,
+			sql`lower(${table.repoCloneUrl})`,
+		),
 	],
 );
 
 export type InsertV2Project = typeof v2Projects.$inferInsert;
 export type SelectV2Project = typeof v2Projects.$inferSelect;
 
-export const v2Devices = pgTable(
-	"v2_devices",
+export const v2Hosts = pgTable(
+	"v2_hosts",
 	{
 		id: uuid().primaryKey().defaultRandom(),
 		organizationId: uuid("organization_id")
 			.notNull()
 			.references(() => organizations.id, { onDelete: "cascade" }),
-		clientId: text("client_id"),
+		machineId: text("machine_id").notNull(),
 		name: text().notNull(),
-		type: v2DeviceType().notNull(),
+		isOnline: boolean("is_online").notNull().default(false),
 		createdByUserId: uuid("created_by_user_id").references(() => users.id, {
 			onDelete: "set null",
 		}),
@@ -428,19 +439,19 @@ export const v2Devices = pgTable(
 			.$onUpdate(() => new Date()),
 	},
 	(table) => [
-		index("v2_devices_organization_id_idx").on(table.organizationId),
-		unique("v2_devices_org_client_id_unique").on(
+		index("v2_hosts_organization_id_idx").on(table.organizationId),
+		unique("v2_hosts_org_machine_id_unique").on(
 			table.organizationId,
-			table.clientId,
+			table.machineId,
 		),
 	],
 );
 
-export type InsertV2Device = typeof v2Devices.$inferInsert;
-export type SelectV2Device = typeof v2Devices.$inferSelect;
+export type InsertV2Host = typeof v2Hosts.$inferInsert;
+export type SelectV2Host = typeof v2Hosts.$inferSelect;
 
-export const v2UsersDevices = pgTable(
-	"v2_users_devices",
+export const v2Clients = pgTable(
+	"v2_clients",
 	{
 		id: uuid().primaryKey().defaultRandom(),
 		organizationId: uuid("organization_id")
@@ -449,10 +460,8 @@ export const v2UsersDevices = pgTable(
 		userId: uuid("user_id")
 			.notNull()
 			.references(() => users.id, { onDelete: "cascade" }),
-		deviceId: uuid("device_id")
-			.notNull()
-			.references(() => v2Devices.id, { onDelete: "cascade" }),
-		role: v2UsersDeviceRole().notNull().default("member"),
+		machineId: text("machine_id").notNull(),
+		type: v2ClientType().notNull(),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -462,31 +471,33 @@ export const v2UsersDevices = pgTable(
 			.$onUpdate(() => new Date()),
 	},
 	(table) => [
-		index("v2_users_devices_organization_id_idx").on(table.organizationId),
-		index("v2_users_devices_user_id_idx").on(table.userId),
-		index("v2_users_devices_device_id_idx").on(table.deviceId),
-		unique("v2_users_devices_user_device_unique").on(
+		index("v2_clients_organization_id_idx").on(table.organizationId),
+		index("v2_clients_user_id_idx").on(table.userId),
+		unique("v2_clients_org_user_machine_unique").on(
+			table.organizationId,
 			table.userId,
-			table.deviceId,
+			table.machineId,
 		),
 	],
 );
 
-export type InsertV2UsersDevices = typeof v2UsersDevices.$inferInsert;
-export type SelectV2UsersDevices = typeof v2UsersDevices.$inferSelect;
+export type InsertV2Client = typeof v2Clients.$inferInsert;
+export type SelectV2Client = typeof v2Clients.$inferSelect;
 
-export const v2DevicePresence = pgTable(
-	"v2_device_presence",
+export const v2UsersHosts = pgTable(
+	"v2_users_hosts",
 	{
-		deviceId: uuid("device_id")
-			.primaryKey()
-			.references(() => v2Devices.id, { onDelete: "cascade" }),
+		id: uuid().primaryKey().defaultRandom(),
 		organizationId: uuid("organization_id")
 			.notNull()
 			.references(() => organizations.id, { onDelete: "cascade" }),
-		lastSeenAt: timestamp("last_seen_at", { withTimezone: true })
+		userId: uuid("user_id")
 			.notNull()
-			.defaultNow(),
+			.references(() => users.id, { onDelete: "cascade" }),
+		hostId: uuid("host_id")
+			.notNull()
+			.references(() => v2Hosts.id, { onDelete: "cascade" }),
+		role: v2UsersHostRole().notNull().default("member"),
 		createdAt: timestamp("created_at", { withTimezone: true })
 			.notNull()
 			.defaultNow(),
@@ -496,13 +507,19 @@ export const v2DevicePresence = pgTable(
 			.$onUpdate(() => new Date()),
 	},
 	(table) => [
-		index("v2_device_presence_organization_id_idx").on(table.organizationId),
-		index("v2_device_presence_last_seen_idx").on(table.lastSeenAt),
+		index("v2_users_hosts_organization_id_idx").on(table.organizationId),
+		index("v2_users_hosts_user_id_idx").on(table.userId),
+		index("v2_users_hosts_host_id_idx").on(table.hostId),
+		unique("v2_users_hosts_org_user_host_unique").on(
+			table.organizationId,
+			table.userId,
+			table.hostId,
+		),
 	],
 );
 
-export type InsertV2DevicePresence = typeof v2DevicePresence.$inferInsert;
-export type SelectV2DevicePresence = typeof v2DevicePresence.$inferSelect;
+export type InsertV2UsersHosts = typeof v2UsersHosts.$inferInsert;
+export type SelectV2UsersHosts = typeof v2UsersHosts.$inferSelect;
 
 export const v2Workspaces = pgTable(
 	"v2_workspaces",
@@ -514,9 +531,9 @@ export const v2Workspaces = pgTable(
 		projectId: uuid("project_id")
 			.notNull()
 			.references(() => v2Projects.id, { onDelete: "cascade" }),
-		deviceId: uuid("device_id")
+		hostId: uuid("host_id")
 			.notNull()
-			.references(() => v2Devices.id),
+			.references(() => v2Hosts.id),
 		name: text().notNull(),
 		branch: text().notNull(),
 		createdByUserId: uuid("created_by_user_id").references(() => users.id, {
@@ -533,7 +550,7 @@ export const v2Workspaces = pgTable(
 	(table) => [
 		index("v2_workspaces_project_id_idx").on(table.projectId),
 		index("v2_workspaces_organization_id_idx").on(table.organizationId),
-		index("v2_workspaces_device_id_idx").on(table.deviceId),
+		index("v2_workspaces_host_id_idx").on(table.hostId),
 	],
 );
 
@@ -688,3 +705,111 @@ export const sessionHosts = pgTable(
 
 export type InsertSessionHost = typeof sessionHosts.$inferInsert;
 export type SelectSessionHost = typeof sessionHosts.$inferSelect;
+
+export const automationRunStatus = pgEnum(
+	"automation_run_status",
+	automationRunStatusValues,
+);
+
+export const automationSessionKind = pgEnum(
+	"automation_session_kind",
+	automationSessionKindValues,
+);
+
+export const automations = pgTable(
+	"automations",
+	{
+		id: uuid().primaryKey().defaultRandom(),
+		organizationId: uuid("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		ownerUserId: uuid("owner_user_id")
+			.notNull()
+			.references(() => users.id, { onDelete: "cascade" }),
+
+		name: text().notNull(),
+		prompt: text().notNull(),
+
+		agentConfig: jsonb("agent_config").$type<ResolvedAgentConfig>().notNull(),
+
+		targetHostId: uuid("target_host_id").references(() => v2Hosts.id, {
+			onDelete: "set null",
+		}),
+
+		v2ProjectId: uuid("v2_project_id")
+			.notNull()
+			.references(() => v2Projects.id, { onDelete: "cascade" }),
+		v2WorkspaceId: uuid("v2_workspace_id"),
+
+		rrule: text().notNull(),
+		dtstart: timestamp("dtstart", { withTimezone: true }).notNull(),
+		timezone: text().notNull(),
+
+		enabled: boolean().notNull().default(true),
+
+		mcpScope: jsonb("mcp_scope").$type<string[]>().notNull().default([]),
+
+		nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
+
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true })
+			.notNull()
+			.defaultNow()
+			.$onUpdate(() => new Date()),
+	},
+	(t) => [
+		index("automations_dispatcher_idx").on(t.enabled, t.nextRunAt),
+		index("automations_owner_idx").on(t.ownerUserId),
+		index("automations_organization_idx").on(t.organizationId),
+	],
+);
+
+export type InsertAutomation = typeof automations.$inferInsert;
+export type SelectAutomation = typeof automations.$inferSelect;
+
+export const automationRuns = pgTable(
+	"automation_runs",
+	{
+		id: uuid().primaryKey().defaultRandom(),
+		automationId: uuid("automation_id")
+			.notNull()
+			.references(() => automations.id, { onDelete: "cascade" }),
+		organizationId: uuid("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+
+		title: text().notNull(),
+
+		scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
+
+		hostId: uuid("host_id").references(() => v2Hosts.id, {
+			onDelete: "set null",
+		}),
+		v2WorkspaceId: uuid("v2_workspace_id"),
+
+		sessionKind: automationSessionKind("session_kind"),
+		chatSessionId: uuid("chat_session_id").references(() => chatSessions.id, {
+			onDelete: "set null",
+		}),
+		terminalSessionId: text("terminal_session_id"),
+
+		status: automationRunStatus().notNull(),
+		error: text(),
+		dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+
+		createdAt: timestamp("created_at", { withTimezone: true })
+			.notNull()
+			.defaultNow(),
+	},
+	(t) => [
+		uniqueIndex("automation_runs_dedup_idx").on(t.automationId, t.scheduledFor),
+		index("automation_runs_history_idx").on(t.automationId, t.createdAt),
+		index("automation_runs_status_idx").on(t.status),
+		index("automation_runs_workspace_idx").on(t.v2WorkspaceId),
+	],
+);
+
+export type InsertAutomationRun = typeof automationRuns.$inferInsert;
+export type SelectAutomationRun = typeof automationRuns.$inferSelect;

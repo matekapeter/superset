@@ -1,3 +1,8 @@
+// v1-only. Dies with the v1 UI sunset. Don't evolve this module — v2 already
+// resolves PRs via host-service (`packages/host-service/src/runtime/pull-requests`
+// backing `git.getPullRequest` + `pullRequests.getByWorkspaces`). Everything
+// under `renderer/screens/main/` + `routes/_authenticated/_dashboard/workspace/`
+// gets deleted together; no port needed.
 import type { CheckItem, GitHubStatus } from "@superset/local-db";
 import { execGitWithShellPath } from "../git-client";
 import { execWithShellEnv } from "../shell-env";
@@ -17,7 +22,11 @@ export async function getPRForBranch(
 	repoContext?: RepoContext,
 	headSha?: string,
 ): Promise<GitHubStatus["pr"]> {
-	const byTracking = await getPRByBranchTracking(worktreePath, localBranch);
+	const byTracking = await getPRByBranchTracking(
+		worktreePath,
+		localBranch,
+		headSha,
+	);
 	if (byTracking) {
 		return byTracking;
 	}
@@ -76,7 +85,10 @@ function getForkOwnerPrefix(
 
 export function prMatchesLocalBranch(
 	localBranch: string,
-	pr: Pick<GHPRResponse, "headRefName" | "headRepositoryOwner">,
+	pr: Pick<
+		GHPRResponse,
+		"headRefName" | "headRepositoryOwner" | "isCrossRepository"
+	>,
 ): boolean {
 	if (!branchMatchesPR(localBranch, pr.headRefName)) {
 		return false;
@@ -84,10 +96,43 @@ export function prMatchesLocalBranch(
 
 	const ownerPrefix = getForkOwnerPrefix(localBranch, pr.headRefName);
 	if (!ownerPrefix) {
+		// Without a fork-owner prefix in the local branch, a cross-fork PR whose
+		// headRefName collides (e.g. fork:main → base:main) would misattribute.
+		if (pr.isCrossRepository) return false;
 		return localBranch === pr.headRefName;
 	}
 
 	return pr.headRepositoryOwner?.login?.toLowerCase() === ownerPrefix;
+}
+
+function isHistoricalPullRequestState(state: GHPRResponse["state"]): boolean {
+	return state === "CLOSED" || state === "MERGED";
+}
+
+export function shouldAcceptPRMatch({
+	localBranch,
+	pr,
+	headSha,
+}: {
+	localBranch: string;
+	pr: Pick<
+		GHPRResponse,
+		"headRefName" | "headRefOid" | "headRepositoryOwner" | "state"
+	>;
+	headSha?: string;
+}): boolean {
+	if (!prMatchesLocalBranch(localBranch, pr)) {
+		return false;
+	}
+
+	// Historical PRs should only attach when this workspace still points at the
+	// exact PR head commit. Otherwise, reusing a branch name can surface an old,
+	// unrelated closed or merged PR.
+	if (headSha && isHistoricalPullRequestState(pr.state)) {
+		return pr.headRefOid === headSha;
+	}
+
+	return true;
 }
 
 function sortPRCandidates(
@@ -133,6 +178,7 @@ function sortPRCandidates(
 async function getPRByBranchTracking(
 	worktreePath: string,
 	localBranch: string,
+	headSha?: string,
 ): Promise<GitHubStatus["pr"]> {
 	try {
 		const { stdout } = await execWithShellEnv(
@@ -150,7 +196,7 @@ async function getPRByBranchTracking(
 		// `gh pr view` can match via stale tracking refs (e.g. refs/pull/N/head)
 		// left over from a previous `gh pr checkout`, causing a new workspace
 		// to incorrectly show an old, unrelated PR.
-		if (!prMatchesLocalBranch(localBranch, data)) {
+		if (!shouldAcceptPRMatch({ localBranch, pr: data, headSha })) {
 			return null;
 		}
 
@@ -199,7 +245,7 @@ async function findPRByHeadBranch(
 			);
 
 			for (const candidate of parsePRListResponse(stdout)) {
-				if (prMatchesLocalBranch(localBranch, candidate)) {
+				if (shouldAcceptPRMatch({ localBranch, pr: candidate, headSha })) {
 					matches.set(candidate.number, candidate);
 				}
 			}

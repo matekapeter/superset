@@ -34,6 +34,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { isEnterSubmit } from "../../lib/keyboard";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -102,6 +103,8 @@ export type PromptInputControllerProps = {
 	) => void;
 	/** INTERNAL: Allows PromptInputTextarea to register its ref for instance-scoped focus */
 	__registerTextarea: (ref: RefObject<HTMLTextAreaElement | null>) => void;
+	/** INTERNAL: Allows TiptapPromptEditor (or similar) to override focus behavior */
+	__registerFocusCallback: (cb: (() => void) | null) => void;
 };
 
 const PromptInputController = createContext<PromptInputControllerProps | null>(
@@ -154,8 +157,18 @@ export function PromptInputProvider({
 	const [textInput, setTextInput] = useState(initialTextInput);
 	const clearInput = useCallback(() => setTextInput(""), []);
 	const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+	const focusCallbackRef = useRef<(() => void) | null>(null);
 	const focus = useCallback(() => {
-		textareaRef.current?.focus();
+		// Prefer a registered focus callback (e.g., from TiptapPromptEditor)
+		if (focusCallbackRef.current) {
+			focusCallbackRef.current();
+			return;
+		}
+		const el = textareaRef.current;
+		if (!el) return;
+		el.focus();
+		const len = el.value.length;
+		el.setSelectionRange(len, len);
 	}, []);
 	const __registerTextarea = useCallback(
 		(ref: RefObject<HTMLTextAreaElement | null>) => {
@@ -163,6 +176,9 @@ export function PromptInputProvider({
 		},
 		[],
 	);
+	const __registerFocusCallback = useCallback((cb: (() => void) | null) => {
+		focusCallbackRef.current = cb;
+	}, []);
 
 	// ----- attachments state (global when wrapped)
 	const [attachmentFiles, setAttachmentFiles] = useState<
@@ -287,6 +303,7 @@ export function PromptInputProvider({
 			attachments,
 			__registerFileInput,
 			__registerTextarea,
+			__registerFocusCallback,
 		}),
 		[
 			textInput,
@@ -295,6 +312,7 @@ export function PromptInputProvider({
 			attachments,
 			__registerFileInput,
 			__registerTextarea,
+			__registerFocusCallback,
 		],
 	);
 
@@ -960,13 +978,17 @@ export const PromptInputTextarea = ({
 	}, [controller]);
 
 	const handleKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
+		// Prevent modifier+arrow combos from bubbling to pane-navigation hotkeys
+		if (
+			(e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+			(e.metaKey || e.ctrlKey)
+		) {
+			e.stopPropagation();
+		}
+
 		if (e.key === "Enter") {
-			if (isComposing || e.nativeEvent.isComposing) {
-				return;
-			}
-			if (e.shiftKey) {
-				return;
-			}
+			if (isComposing) return;
+			if (!isEnterSubmit(e)) return;
 			e.preventDefault();
 
 			// Check if the submit button is disabled before submitting

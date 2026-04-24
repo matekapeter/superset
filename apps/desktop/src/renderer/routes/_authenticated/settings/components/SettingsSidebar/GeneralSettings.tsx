@@ -6,8 +6,9 @@ import {
 	HiOutlineCommandLine,
 	HiOutlineCpuChip,
 	HiOutlineCreditCard,
-	HiOutlineDevicePhoneMobile,
 	HiOutlineKey,
+	HiOutlineLink,
+	HiOutlineLockClosed,
 	HiOutlinePaintBrush,
 	HiOutlinePuzzlePiece,
 	HiOutlineShieldCheck,
@@ -32,11 +33,12 @@ type SettingsRoute =
 	| "/settings/git"
 	| "/settings/agents"
 	| "/settings/terminal"
+	| "/settings/links"
 	| "/settings/models"
 	| "/settings/integrations"
 	| "/settings/billing"
-	| "/settings/devices"
 	| "/settings/api-keys"
+	| "/settings/security"
 	| "/settings/permissions";
 
 interface SectionItem {
@@ -74,12 +76,6 @@ const SECTION_GROUPS: SectionGroup[] = [
 				label: "Notifications",
 				icon: <HiOutlineBell className="h-4 w-4" />,
 			},
-			{
-				id: "/settings/keyboard",
-				section: "keyboard",
-				label: "Keyboard",
-				icon: <LuKeyboard className="h-4 w-4" />,
-			},
 		],
 	},
 	{
@@ -90,6 +86,12 @@ const SECTION_GROUPS: SectionGroup[] = [
 				section: "behavior",
 				label: "General",
 				icon: <HiOutlineSparkles className="h-4 w-4" />,
+			},
+			{
+				id: "/settings/keyboard",
+				section: "keyboard",
+				label: "Keyboard",
+				icon: <LuKeyboard className="h-4 w-4" />,
 			},
 			{
 				id: "/settings/git",
@@ -108,6 +110,12 @@ const SECTION_GROUPS: SectionGroup[] = [
 				section: "terminal",
 				label: "Terminal",
 				icon: <HiOutlineCommandLine className="h-4 w-4" />,
+			},
+			{
+				id: "/settings/links",
+				section: "links",
+				label: "Links",
+				icon: <HiOutlineLink className="h-4 w-4" />,
 			},
 			{
 				id: "/settings/models",
@@ -139,12 +147,6 @@ const SECTION_GROUPS: SectionGroup[] = [
 				icon: <HiOutlineCreditCard className="h-4 w-4" />,
 			},
 			{
-				id: "/settings/devices",
-				section: "devices",
-				label: "Devices",
-				icon: <HiOutlineDevicePhoneMobile className="h-4 w-4" />,
-			},
-			{
 				id: "/settings/api-keys",
 				section: "apikeys",
 				label: "API Keys",
@@ -155,6 +157,12 @@ const SECTION_GROUPS: SectionGroup[] = [
 	{
 		label: "System",
 		items: [
+			{
+				id: "/settings/security",
+				section: "security",
+				label: "Security",
+				icon: <HiOutlineLockClosed className="h-4 w-4" />,
+			},
 			{
 				id: "/settings/permissions",
 				section: "permissions",

@@ -1,5 +1,9 @@
 import type { GitHubStatus, PullRequestComment } from "@superset/local-db";
-import { branchExistsOnRemote } from "../git";
+import {
+	branchExistsOnRemote,
+	getCurrentBranch,
+	isUnbornHeadError,
+} from "../git";
 import { execGitWithShellPath } from "../git-client";
 import { execWithShellEnv } from "../shell-env";
 import { parseUpstreamRef } from "../upstream-ref";
@@ -10,7 +14,7 @@ import {
 	readCachedGitHubStatus,
 	readCachedPullRequestComments,
 } from "./cache";
-import { fetchPullRequestComments } from "./comments";
+import { fetchPullRequestComments, resolveReviewThread } from "./comments";
 import { getPRForBranch } from "./pr-resolution";
 import { extractNwoFromUrl, getRepoContext } from "./repo-context";
 import {
@@ -24,7 +28,7 @@ export interface PullRequestCommentsTarget {
 	repoContext: Pick<RepoContext, "repoUrl" | "upstreamUrl" | "isFork">;
 }
 
-export { clearGitHubCachesForWorktree };
+export { clearGitHubCachesForWorktree, resolveReviewThread };
 
 function getPullRequestCommentsRepoNameWithOwner(
 	target: PullRequestCommentsTarget,
@@ -38,22 +42,36 @@ function getPullRequestCommentsRepoNameWithOwner(
 
 async function resolvePullRequestCommentsTarget(
 	worktreePath: string,
+	branchOverride?: string | null,
 ): Promise<PullRequestCommentsTarget | null> {
 	const repoContext = await getRepoContext(worktreePath);
 	if (!repoContext) {
 		return null;
 	}
 
-	const [branchResult, shaResult] = await Promise.all([
-		execGitWithShellPath(["rev-parse", "--abbrev-ref", "HEAD"], {
-			cwd: worktreePath,
-		}),
-		execGitWithShellPath(["rev-parse", "HEAD"], {
-			cwd: worktreePath,
-		}),
-	]);
-	const branchName = branchResult.stdout.trim();
-	const headSha = shaResult.stdout.trim();
+	const branchName =
+		branchOverride?.trim() || (await getCurrentBranch(worktreePath));
+	if (!branchName) {
+		return null;
+	}
+
+	const revParseTarget = branchOverride ? `refs/heads/${branchName}` : "HEAD";
+	const shaResult = await execGitWithShellPath(["rev-parse", revParseTarget], {
+		cwd: worktreePath,
+	}).catch((error) => {
+		if (isUnbornHeadError(error)) {
+			return { stdout: "", stderr: "" };
+		}
+		if (branchOverride) {
+			return { stdout: "", stderr: "" };
+		}
+		throw error;
+	});
+	const headSha = shaResult.stdout.trim() || undefined;
+
+	if (branchOverride && !headSha) {
+		return null;
+	}
 	const prInfo = await getPRForBranch(
 		worktreePath,
 		branchName,
@@ -84,6 +102,7 @@ export function resolveRemoteBranchNameForGitHubStatus({
 
 async function refreshGitHubPRStatus(
 	worktreePath: string,
+	branchOverride?: string | null,
 ): Promise<GitHubStatus | null> {
 	try {
 		const repoContext = await getRepoContext(worktreePath);
@@ -91,17 +110,41 @@ async function refreshGitHubPRStatus(
 			return null;
 		}
 
-		const [branchResult, shaResult, upstreamResult] = await Promise.all([
-			execGitWithShellPath(["rev-parse", "--abbrev-ref", "HEAD"], {
+		const branchName =
+			branchOverride?.trim() || (await getCurrentBranch(worktreePath));
+		if (!branchName) {
+			return null;
+		}
+
+		const revParseTarget = branchOverride ? `refs/heads/${branchName}` : "HEAD";
+		const upstreamTarget = branchOverride
+			? `${branchName}@{upstream}`
+			: "@{upstream}";
+
+		const [shaResult, upstreamResult] = await Promise.all([
+			execGitWithShellPath(["rev-parse", revParseTarget], {
 				cwd: worktreePath,
+			}).catch((error) => {
+				if (isUnbornHeadError(error)) {
+					return { stdout: "", stderr: "" };
+				}
+				if (branchOverride) {
+					return { stdout: "", stderr: "" };
+				}
+				throw error;
 			}),
-			execGitWithShellPath(["rev-parse", "HEAD"], { cwd: worktreePath }),
-			execGitWithShellPath(["rev-parse", "--abbrev-ref", "@{upstream}"], {
+			execGitWithShellPath(["rev-parse", "--abbrev-ref", upstreamTarget], {
 				cwd: worktreePath,
 			}).catch(() => ({ stdout: "", stderr: "" })),
 		]);
-		const branchName = branchResult.stdout.trim();
-		const headSha = shaResult.stdout.trim();
+		const headSha = shaResult.stdout.trim() || undefined;
+
+		// When using a branch override, we must have a valid SHA to avoid
+		// getPRForBranch falling back to HEAD (which is a different branch).
+		if (branchOverride && !headSha) {
+			return null;
+		}
+
 		const parsedUpstreamRef = parseUpstreamRef(upstreamResult.stdout.trim());
 		const trackingRemote = parsedUpstreamRef?.remoteName ?? "origin";
 		const previewBranchName = resolveRemoteBranchNameForGitHubStatus({
@@ -179,27 +222,36 @@ async function refreshGitHubPRComments({
 }
 
 /**
- * Fetches GitHub PR status for a worktree using the `gh` CLI.
+ * Fetches GitHub PR status for a worktree or branch workspace using the `gh` CLI.
  * Returns null if `gh` is not installed, not authenticated, or on error.
+ *
+ * @param branchName - Optional branch name override. When provided (for branch
+ *   workspaces), resolves the SHA and upstream for that branch instead of using
+ *   HEAD / the checked-out branch. Also used to scope the cache key.
  */
 export async function fetchGitHubPRStatus(
 	worktreePath: string,
+	branchName?: string | null,
 ): Promise<GitHubStatus | null> {
-	return readCachedGitHubStatus(worktreePath, () =>
-		refreshGitHubPRStatus(worktreePath),
+	const cacheKey = branchName ? `${worktreePath}::${branchName}` : worktreePath;
+	return readCachedGitHubStatus(cacheKey, () =>
+		refreshGitHubPRStatus(worktreePath, branchName),
 	);
 }
 
 export async function fetchGitHubPRComments({
 	worktreePath,
 	pullRequest,
+	branchName,
 }: {
 	worktreePath: string;
 	pullRequest?: PullRequestCommentsTarget | null;
+	branchName?: string | null;
 }): Promise<PullRequestComment[]> {
 	try {
 		const pullRequestTarget =
-			pullRequest ?? (await resolvePullRequestCommentsTarget(worktreePath));
+			pullRequest ??
+			(await resolvePullRequestCommentsTarget(worktreePath, branchName));
 		if (!pullRequestTarget) {
 			return [];
 		}
@@ -324,7 +376,7 @@ async function queryDeploymentUrl(
  */
 async function fetchPreviewDeploymentUrl(
 	worktreePath: string,
-	headSha: string,
+	headSha: string | undefined,
 	branchName: string,
 	repoContext: RepoContext,
 ): Promise<string | undefined> {
@@ -337,10 +389,16 @@ async function fetchPreviewDeploymentUrl(
 			return undefined;
 		}
 
-		// Try by commit SHA (works for Vercel, Netlify official integrations)
-		const bySha = await queryDeploymentUrl(worktreePath, nwo, `sha=${headSha}`);
-		if (bySha) {
-			return bySha;
+		if (headSha) {
+			// Try by commit SHA (works for Vercel, Netlify official integrations)
+			const bySha = await queryDeploymentUrl(
+				worktreePath,
+				nwo,
+				`sha=${headSha}`,
+			);
+			if (bySha) {
+				return bySha;
+			}
 		}
 
 		// Fall back to branch name (works for some CI configurations)

@@ -1,3 +1,6 @@
+import { useNavigate } from "@tanstack/react-router";
+import { useDiffStats } from "renderer/hooks/host-service/useDiffStats";
+import { useDeletingWorkspaces } from "renderer/routes/_authenticated/providers/DeletingWorkspacesProvider";
 import type { DashboardSidebarWorkspace } from "../../types";
 import { DashboardSidebarDeleteDialog } from "../DashboardSidebarDeleteDialog";
 import { DashboardSidebarCollapsedWorkspaceButton } from "./components/DashboardSidebarCollapsedWorkspaceButton";
@@ -5,13 +8,13 @@ import { DashboardSidebarExpandedWorkspaceRow } from "./components/DashboardSide
 import { DashboardSidebarWorkspaceContextMenu } from "./components/DashboardSidebarWorkspaceContextMenu/DashboardSidebarWorkspaceContextMenu";
 import { DashboardSidebarWorkspaceHoverCardContent } from "./components/DashboardSidebarWorkspaceHoverCardContent";
 import { useDashboardSidebarWorkspaceItemActions } from "./hooks/useDashboardSidebarWorkspaceItemActions";
-import { getWorkspaceRowMocks } from "./utils";
 
 interface DashboardSidebarWorkspaceItemProps {
 	workspace: DashboardSidebarWorkspace;
 	onHoverCardOpen?: () => void;
 	shortcutLabel?: string;
 	isCollapsed?: boolean;
+	isInSection?: boolean;
 }
 
 export function DashboardSidebarWorkspaceItem({
@@ -19,30 +22,32 @@ export function DashboardSidebarWorkspaceItem({
 	onHoverCardOpen,
 	shortcutLabel,
 	isCollapsed = false,
+	isInSection = false,
 }: DashboardSidebarWorkspaceItemProps) {
 	const {
 		id,
 		projectId,
 		accentColor = null,
 		hostType,
+		hostIsOnline,
 		name,
 		branch,
 		creationStatus,
 	} = workspace;
-	const mockData = getWorkspaceRowMocks(id);
+	const diffStats = useDiffStats(id);
 	const {
 		cancelRename,
 		handleClick,
 		handleCopyPath,
+		handleCopyBranchName,
 		handleCreateSection,
-		handleDelete,
+		handleDeleted,
 		handleOpenInFinder,
+		handleRemoveFromSidebar,
 		isActive,
 		isDeleteDialogOpen,
-		isDeleting,
 		isRenaming,
 		moveWorkspaceToSection,
-		removeWorkspaceFromSidebar,
 		renameValue,
 		setIsDeleteDialogOpen,
 		setRenameValue,
@@ -52,9 +57,21 @@ export function DashboardSidebarWorkspaceItem({
 		workspaceId: id,
 		projectId,
 		workspaceName: name,
+		branch,
 	});
 
-	const isCreating = !!creationStatus;
+	const navigate = useNavigate();
+	const isPending = !!creationStatus;
+	// Keep the delete dialog outside the hidden wrapper below — the destroy
+	// flow reopens it into an error pane on conflict/teardown-failed.
+	const isDeleting = useDeletingWorkspaces().isDeleting(id);
+	const handlePendingClick = isPending
+		? () => {
+				void navigate({
+					to: `/pending/${id}` as string,
+				});
+			}
+		: undefined;
 
 	if (isCollapsed) {
 		const content = (
@@ -69,11 +86,11 @@ export function DashboardSidebarWorkspaceItem({
 				)}
 				<DashboardSidebarCollapsedWorkspaceButton
 					hostType={hostType}
+					hostIsOnline={hostIsOnline}
 					isActive={isActive}
-					onClick={isCreating ? undefined : handleClick}
-					workspaceStatus={isCreating ? null : mockData.workspaceStatus}
+					onClick={isPending ? handlePendingClick : handleClick}
 					creationStatus={creationStatus}
-					disabled={isCreating}
+					disabled={isPending}
 					aria-label={
 						creationStatus ? `Creating workspace: ${name}` : undefined
 					}
@@ -83,42 +100,46 @@ export function DashboardSidebarWorkspaceItem({
 
 		return (
 			<>
-				{isCreating ? (
-					content
-				) : (
-					<DashboardSidebarWorkspaceContextMenu
-						projectId={projectId}
-						onHoverCardOpen={
-							hostType === "local-device" ? onHoverCardOpen : undefined
-						}
-						hoverCardContent={
-							<DashboardSidebarWorkspaceHoverCardContent
-								workspace={workspace}
-								mockData={mockData}
-							/>
-						}
-						onCreateSection={handleCreateSection}
-						onMoveToSection={(targetSectionId) =>
-							moveWorkspaceToSection(id, projectId, targetSectionId)
-						}
-						onOpenInFinder={handleOpenInFinder}
-						onCopyPath={handleCopyPath}
-						onRemoveFromSidebar={() => removeWorkspaceFromSidebar(id)}
-						onRename={startRename}
-						onDelete={() => setIsDeleteDialogOpen(true)}
-					>
-						{content}
-					</DashboardSidebarWorkspaceContextMenu>
-				)}
+				<div hidden={isDeleting}>
+					{isPending ? (
+						content
+					) : (
+						<DashboardSidebarWorkspaceContextMenu
+							projectId={projectId}
+							isInSection={isInSection}
+							onHoverCardOpen={
+								hostType === "local-device" ? onHoverCardOpen : undefined
+							}
+							hoverCardContent={
+								<DashboardSidebarWorkspaceHoverCardContent
+									workspace={workspace}
+									diffStats={diffStats}
+								/>
+							}
+							isLocalWorkspace={hostType === "local-device"}
+							onCreateSection={handleCreateSection}
+							onMoveToSection={(targetSectionId) =>
+								moveWorkspaceToSection(id, projectId, targetSectionId)
+							}
+							onOpenInFinder={handleOpenInFinder}
+							onCopyPath={handleCopyPath}
+							onCopyBranchName={handleCopyBranchName}
+							onRemoveFromSidebar={handleRemoveFromSidebar}
+							onRename={startRename}
+							onDelete={() => setIsDeleteDialogOpen(true)}
+						>
+							{content}
+						</DashboardSidebarWorkspaceContextMenu>
+					)}
+				</div>
 
-				{!isCreating && (
+				{!isPending && (
 					<DashboardSidebarDeleteDialog
+						workspaceId={id}
+						workspaceName={name || branch}
 						open={isDeleteDialogOpen}
 						onOpenChange={setIsDeleteDialogOpen}
-						onConfirm={handleDelete}
-						title={`Delete "${name || branch}"?`}
-						description="This will permanently delete the workspace."
-						isPending={isDeleting}
+						onDeleted={handleDeleted}
 					/>
 				)}
 			</>
@@ -132,9 +153,9 @@ export function DashboardSidebarWorkspaceItem({
 			isRenaming={isRenaming}
 			renameValue={renameValue}
 			shortcutLabel={shortcutLabel}
-			mockData={isCreating ? { ...mockData, workspaceStatus: null } : mockData}
-			onClick={isCreating ? undefined : handleClick}
-			onDoubleClick={isCreating ? undefined : startRename}
+			diffStats={isPending ? null : diffStats}
+			onClick={isPending ? handlePendingClick : handleClick}
+			onDoubleClick={isPending ? undefined : startRename}
 			onDeleteClick={() => setIsDeleteDialogOpen(true)}
 			onRenameValueChange={setRenameValue}
 			onSubmitRename={submitRename}
@@ -144,42 +165,46 @@ export function DashboardSidebarWorkspaceItem({
 
 	return (
 		<>
-			{isCreating ? (
-				expandedContent
-			) : (
-				<DashboardSidebarWorkspaceContextMenu
-					projectId={projectId}
-					onHoverCardOpen={
-						hostType === "local-device" ? onHoverCardOpen : undefined
-					}
-					hoverCardContent={
-						<DashboardSidebarWorkspaceHoverCardContent
-							workspace={workspace}
-							mockData={mockData}
-						/>
-					}
-					onCreateSection={handleCreateSection}
-					onMoveToSection={(targetSectionId) =>
-						moveWorkspaceToSection(id, projectId, targetSectionId)
-					}
-					onOpenInFinder={handleOpenInFinder}
-					onCopyPath={handleCopyPath}
-					onRemoveFromSidebar={() => removeWorkspaceFromSidebar(id)}
-					onRename={startRename}
-					onDelete={() => setIsDeleteDialogOpen(true)}
-				>
-					{expandedContent}
-				</DashboardSidebarWorkspaceContextMenu>
-			)}
+			<div hidden={isDeleting}>
+				{isPending ? (
+					expandedContent
+				) : (
+					<DashboardSidebarWorkspaceContextMenu
+						projectId={projectId}
+						isInSection={isInSection}
+						onHoverCardOpen={
+							hostType === "local-device" ? onHoverCardOpen : undefined
+						}
+						hoverCardContent={
+							<DashboardSidebarWorkspaceHoverCardContent
+								workspace={workspace}
+								diffStats={diffStats}
+							/>
+						}
+						onCreateSection={handleCreateSection}
+						onMoveToSection={(targetSectionId) =>
+							moveWorkspaceToSection(id, projectId, targetSectionId)
+						}
+						isLocalWorkspace={hostType === "local-device"}
+						onOpenInFinder={handleOpenInFinder}
+						onCopyPath={handleCopyPath}
+						onCopyBranchName={handleCopyBranchName}
+						onRemoveFromSidebar={handleRemoveFromSidebar}
+						onRename={startRename}
+						onDelete={() => setIsDeleteDialogOpen(true)}
+					>
+						{expandedContent}
+					</DashboardSidebarWorkspaceContextMenu>
+				)}
+			</div>
 
-			{!isCreating && (
+			{!isPending && (
 				<DashboardSidebarDeleteDialog
+					workspaceId={id}
+					workspaceName={name || branch}
 					open={isDeleteDialogOpen}
 					onOpenChange={setIsDeleteDialogOpen}
-					onConfirm={handleDelete}
-					title={`Delete "${name || branch}"?`}
-					description="This will permanently delete the workspace."
-					isPending={isDeleting}
+					onDeleted={handleDeleted}
 				/>
 			)}
 		</>

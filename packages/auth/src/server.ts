@@ -1,3 +1,4 @@
+import { apiKey } from "@better-auth/api-key";
 import { expo } from "@better-auth/expo";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { stripe } from "@better-auth/stripe";
@@ -19,12 +20,7 @@ import { getTrustedVercelPreviewOrigins } from "@superset/shared/vercel-preview-
 import { Client } from "@upstash/qstash";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import {
-	apiKey,
-	bearer,
-	customSession,
-	organization,
-} from "better-auth/plugins";
+import { bearer, customSession, organization } from "better-auth/plugins";
 import { jwt } from "better-auth/plugins/jwt";
 import { and, count, desc, eq, sql } from "drizzle-orm";
 import type Stripe from "stripe";
@@ -172,6 +168,9 @@ export const auth = betterAuth({
 			enableMetadata: true,
 			enableSessionForAPIKeys: true,
 			defaultPrefix: "sk_live_",
+			rateLimit: {
+				enabled: false,
+			},
 		}),
 		jwt({
 			jwks: {
@@ -203,7 +202,11 @@ export const auth = betterAuth({
 			consentPage: `${env.NEXT_PUBLIC_WEB_URL}/oauth/consent`,
 			allowDynamicClientRegistration: true,
 			allowUnauthenticatedClientRegistration: true,
-			validAudiences: [env.NEXT_PUBLIC_API_URL, `${env.NEXT_PUBLIC_API_URL}/`],
+			validAudiences: [
+				env.NEXT_PUBLIC_API_URL,
+				`${env.NEXT_PUBLIC_API_URL}/`,
+				`${env.NEXT_PUBLIC_API_URL}/api/agent/mcp`,
+			],
 			silenceWarnings: {
 				oauthAuthServerConfig: true,
 				openidConfig: true,
@@ -325,7 +328,23 @@ export const auth = betterAuth({
 					});
 				},
 
-				beforeAddMember: async ({ organization }) => {
+				beforeAddMember: async ({ organization, user }) => {
+					// Domain-allowlisted users bypass the free-plan member limit.
+					// If an admin put the user's domain in allowedDomains, they've
+					// already explicitly opted in to letting those users join.
+					// (allowedDomains isn't on the hook's organization arg because
+					// it isn't declared as a better-auth additionalField — fetch it.)
+					const userDomain = user.email.split("@")[1]?.toLowerCase();
+					if (userDomain) {
+						const orgRow = await db.query.organizations.findFirst({
+							where: eq(authSchema.organizations.id, organization.id),
+							columns: { allowedDomains: true },
+						});
+						if (orgRow?.allowedDomains?.includes(userDomain)) {
+							return;
+						}
+					}
+
 					const subscription = await db.query.subscriptions.findFirst({
 						where: and(
 							eq(subscriptions.referenceId, organization.id),
@@ -911,3 +930,40 @@ export const auth = betterAuth({
 
 export type Session = typeof auth.$Infer.Session;
 export type User = typeof auth.$Infer.Session.user;
+
+/**
+ * Mints a short-lived JWT signed with the same JWKS key the Better Auth JWT
+ * plugin uses for session-derived tokens. Used by headless service code
+ * (e.g. the automations dispatcher) that needs to act on behalf of a user
+ * without holding their session cookie.
+ *
+ * The resulting token is accepted by anything that verifies via the public
+ * JWKS endpoint (the relay and any other downstream service), because it is
+ * signed with the same RS256 key pair.
+ */
+export async function mintUserJwt(args: {
+	userId: string;
+	email?: string;
+	organizationIds: string[];
+	scope?: string;
+	runId?: string;
+	/** Token lifetime in seconds. Default 300 (5 minutes). */
+	ttlSeconds?: number;
+}): Promise<string> {
+	const exp = Math.floor(Date.now() / 1000) + (args.ttlSeconds ?? 300);
+
+	const response = await auth.api.signJWT({
+		body: {
+			payload: {
+				sub: args.userId,
+				email: args.email,
+				organizationIds: args.organizationIds,
+				scope: args.scope,
+				runId: args.runId,
+				exp,
+			},
+		},
+	});
+
+	return response.token;
+}

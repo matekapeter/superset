@@ -104,24 +104,32 @@ export function FileItem({
 		usePathActions({
 			absolutePath,
 			relativePath: file.path,
-			cwd: worktreePath,
+			worktreePath,
 			defaultApp,
 			projectId,
 		});
 
 	const fileDragProps = useFileDrag({ absolutePath });
 
-	const handleClick = useCallback(() => {
-		if (clickTimeoutRef.current) {
-			clearTimeout(clickTimeoutRef.current);
-			clickTimeoutRef.current = null;
-		}
+	const handleClick = useCallback(
+		(e: React.MouseEvent) => {
+			if (e.metaKey || e.ctrlKey) {
+				openInEditor();
+				return;
+			}
 
-		clickTimeoutRef.current = setTimeout(() => {
-			clickTimeoutRef.current = null;
-			onClick();
-		}, 300);
-	}, [onClick]);
+			if (clickTimeoutRef.current) {
+				clearTimeout(clickTimeoutRef.current);
+				clickTimeoutRef.current = null;
+			}
+
+			clickTimeoutRef.current = setTimeout(() => {
+				clickTimeoutRef.current = null;
+				onClick();
+			}, 300);
+		},
+		[onClick, openInEditor],
+	);
 
 	const handleDoubleClick = useCallback(
 		(e: React.MouseEvent) => {

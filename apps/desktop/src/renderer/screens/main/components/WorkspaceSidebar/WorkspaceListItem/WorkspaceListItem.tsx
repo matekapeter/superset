@@ -3,11 +3,12 @@ import { toast } from "@superset/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
 import { cn } from "@superset/ui/utils";
 import { useMatchRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { HiMiniXMark } from "react-icons/hi2";
 import { useCopyToClipboard } from "renderer/hooks/useCopyToClipboard";
+import { HotkeyLabel } from "renderer/hotkeys";
 import { electronTrpc } from "renderer/lib/electron-trpc";
-import { getGitHubStatusQueryPolicy } from "renderer/lib/githubQueryPolicy";
+import { useHoverGitHubStatus } from "renderer/lib/githubQueryPolicy";
 import { useWorkspaceDeleteHandler } from "renderer/react-query/workspaces";
 import { navigateToWorkspace } from "renderer/routes/_authenticated/_dashboard/utils/workspace-navigation";
 import { WorkspaceRunIndicator } from "renderer/screens/main/components/WorkspaceRunIndicator";
@@ -66,7 +67,15 @@ export function WorkspaceListItem({
 	const isBranchWorkspace = type === "branch";
 	const navigate = useNavigate();
 	const matchRoute = useMatchRoute();
-	const [hasHovered, setHasHovered] = useState(false);
+	const {
+		githubStatus,
+		hasHovered,
+		onMouseEnter: onGithubMouseEnter,
+	} = useHoverGitHubStatus({
+		workspaceId: id,
+		surface: "workspace-list-item",
+		isWorktree: type === "worktree",
+	});
 	const rename = useWorkspaceRename(id, name, branch);
 	const workspaceStatus = useTabsStore((state) => {
 		function* paneStatuses() {
@@ -134,6 +143,10 @@ export function WorkspaceListItem({
 	const openInFinder = electronTrpc.external.openInFinder.useMutation({
 		onError: (error) => toast.error(`Failed to open: ${error.message}`),
 	});
+	const openFileInEditor = electronTrpc.external.openFileInEditor.useMutation({
+		onError: (error) =>
+			toast.error(`Failed to open in editor: ${error.message}`),
+	});
 	const setUnread = electronTrpc.workspaces.setUnread.useMutation({
 		onSuccess: () => utils.workspaces.getAllGrouped.invalidate(),
 		onError: (error) =>
@@ -142,20 +155,6 @@ export function WorkspaceListItem({
 
 	const { showDeleteDialog, setShowDeleteDialog, handleDeleteClick } =
 		useWorkspaceDeleteHandler();
-	const githubStatusQueryPolicy = getGitHubStatusQueryPolicy(
-		"workspace-list-item",
-		{
-			hasWorkspaceId: !!id,
-			isActive: hasHovered && type === "worktree",
-		},
-	);
-
-	const { data: githubStatus } =
-		electronTrpc.workspaces.getGitHubStatus.useQuery(
-			{ workspaceId: id },
-			githubStatusQueryPolicy,
-		);
-
 	const { status: localChanges } = useGitChangesStatus({
 		worktreePath,
 		enabled: hasHovered && !!worktreePath,
@@ -168,7 +167,6 @@ export function WorkspaceListItem({
 			{
 				enabled: isBranchWorkspace,
 				staleTime: GITHUB_STATUS_STALE_TIME,
-				refetchInterval: hasHovered ? GITHUB_STATUS_STALE_TIME : false,
 			},
 		);
 
@@ -226,7 +224,7 @@ export function WorkspaceListItem({
 	};
 
 	const handleMouseEnter = () => {
-		if (!hasHovered) setHasHovered(true);
+		onGithubMouseEnter();
 		if (isBranchWorkspace) void refetchAheadBehind();
 	};
 
@@ -234,11 +232,21 @@ export function WorkspaceListItem({
 		if (worktreePath) openInFinder.mutate(worktreePath);
 	};
 
+	const handleOpenInEditor = () => {
+		if (worktreePath)
+			openFileInEditor.mutate({ path: worktreePath, projectId });
+	};
+
 	const { copyToClipboard } = useCopyToClipboard();
 	const handleCopyPath = async () => {
 		if (!worktreePath) return;
 		await copyToClipboard(worktreePath);
 		toast.success("Path copied to clipboard");
+	};
+	const handleCopyBranchName = async () => {
+		if (!branch) return;
+		await copyToClipboard(branch);
+		toast.success("Branch name copied to clipboard");
 	};
 
 	const pr = githubStatus?.pr;
@@ -267,6 +275,7 @@ export function WorkspaceListItem({
 				onClick={handleClick}
 				onDeleteClick={handleDeleteClick}
 				onCopyPath={handleCopyPath}
+				onCopyBranchName={handleCopyBranchName}
 			/>
 		);
 	}
@@ -416,7 +425,10 @@ export function WorkspaceListItem({
 												</button>
 											</TooltipTrigger>
 											<TooltipContent side="top" sideOffset={4}>
-												Close workspace
+												<HotkeyLabel
+													label="Close workspace"
+													id={isActive ? "CLOSE_WORKSPACE" : undefined}
+												/>
 											</TooltipContent>
 										</Tooltip>
 									)}
@@ -459,10 +471,12 @@ export function WorkspaceListItem({
 				sections={sections}
 				onRename={rename.startRename}
 				onOpenInFinder={handleOpenInFinder}
+				onOpenInEditor={handleOpenInEditor}
 				onCopyPath={handleCopyPath}
+				onCopyBranchName={handleCopyBranchName}
 				onSetUnread={(unread) => setUnread.mutate({ id, isUnread: unread })}
 				onResetStatus={() => resetWorkspaceStatus(id)}
-				onClose={handleDeleteClick}
+				onDelete={handleDeleteClick}
 			>
 				{content}
 			</WorkspaceContextMenu>

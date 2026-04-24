@@ -40,6 +40,9 @@ export const SETTING_ITEM_ID = {
 	TERMINAL_SESSIONS: "terminal-sessions",
 	TERMINAL_LINK_BEHAVIOR: "terminal-link-behavior",
 
+	LINKS_FILE: "links-file",
+	LINKS_URL: "links-url",
+
 	MODELS_ANTHROPIC: "models-anthropic",
 	MODELS_OPENAI: "models-openai",
 
@@ -67,6 +70,9 @@ export const SETTING_ITEM_ID = {
 	PERMISSIONS_MICROPHONE: "permissions-microphone",
 	PERMISSIONS_APPLE_EVENTS: "permissions-apple-events",
 	PERMISSIONS_LOCAL_NETWORK: "permissions-local-network",
+
+	SECURITY_EXPOSE_HOST_SERVICE_VIA_RELAY:
+		"security-expose-host-service-via-relay",
 } as const;
 
 export type SettingItemId =
@@ -618,6 +624,55 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 		],
 	},
 	{
+		id: SETTING_ITEM_ID.LINKS_FILE,
+		section: "links",
+		title: "File links",
+		description:
+			"How file paths open when clicked in terminals, chat, and tasks",
+		keywords: [
+			"links",
+			"file",
+			"click",
+			"cmd",
+			"ctrl",
+			"shift",
+			"meta",
+			"pane",
+			"editor",
+			"external",
+			"open",
+			"terminal",
+			"chat",
+			"markdown",
+			"behavior",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.LINKS_URL,
+		section: "links",
+		title: "URL links",
+		description: "How URLs open when clicked in terminals, chat, and tasks",
+		keywords: [
+			"links",
+			"url",
+			"link",
+			"click",
+			"cmd",
+			"ctrl",
+			"shift",
+			"meta",
+			"browser",
+			"in-app",
+			"system",
+			"external",
+			"open",
+			"terminal",
+			"chat",
+			"markdown",
+			"behavior",
+		],
+	},
+	{
 		id: SETTING_ITEM_ID.MODELS_ANTHROPIC,
 		section: "models",
 		title: "Anthropic Model Auth",
@@ -982,6 +1037,26 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"security",
 			"privacy",
 			"development servers",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.SECURITY_EXPOSE_HOST_SERVICE_VIA_RELAY,
+		section: "security",
+		title: "Allow remote workspaces to access this device via relay",
+		description:
+			"Controls whether remote workspaces can reach your local host service through the Superset relay",
+		keywords: [
+			"security",
+			"relay",
+			"remote",
+			"workspace",
+			"expose",
+			"lockdown",
+			"network",
+			"inbound",
+			"host service",
+			"tunnel",
+			"attack surface",
 		],
 	},
 ];

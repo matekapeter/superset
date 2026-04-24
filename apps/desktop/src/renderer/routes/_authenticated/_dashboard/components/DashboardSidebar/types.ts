@@ -23,8 +23,9 @@ export interface DashboardSidebarWorkspacePullRequest {
 export interface DashboardSidebarWorkspace {
 	id: string;
 	projectId: string;
-	deviceId: string;
+	hostId: string;
 	hostType: DashboardSidebarWorkspaceHostType;
+	hostIsOnline: boolean | null;
 	accentColor: string | null;
 	name: string;
 	branch: string;
@@ -36,7 +37,7 @@ export interface DashboardSidebarWorkspace {
 	behindCount: number | null;
 	createdAt: Date;
 	updatedAt: Date;
-	creationStatus?: "preparing" | "generating-branch" | "creating";
+	creationStatus?: "preparing" | "generating-branch" | "creating" | "failed";
 }
 
 export interface DashboardSidebarSection {

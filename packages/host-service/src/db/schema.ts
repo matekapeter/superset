@@ -6,6 +6,29 @@ import {
 	uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+export const terminalSessions = sqliteTable(
+	"terminal_sessions",
+	{
+		id: text().primaryKey(),
+		originWorkspaceId: text("origin_workspace_id").references(
+			() => workspaces.id,
+			{ onDelete: "set null" },
+		),
+		status: text().notNull().default("active"),
+		createdAt: integer("created_at")
+			.notNull()
+			.$defaultFn(() => Date.now()),
+		lastAttachedAt: integer("last_attached_at"),
+		endedAt: integer("ended_at"),
+	},
+	(table) => [
+		index("terminal_sessions_origin_workspace_id_idx").on(
+			table.originWorkspaceId,
+		),
+		index("terminal_sessions_status_idx").on(table.status),
+	],
+);
+
 export const projects = sqliteTable(
 	"projects",
 	{
@@ -79,6 +102,9 @@ export const workspaces = sqliteTable(
 		worktreePath: text("worktree_path").notNull(),
 		branch: text().notNull(),
 		headSha: text("head_sha"),
+		upstreamOwner: text("upstream_owner"),
+		upstreamRepo: text("upstream_repo"),
+		upstreamBranch: text("upstream_branch"),
 		pullRequestId: text("pull_request_id").references(() => pullRequests.id, {
 			onDelete: "set null",
 		}),
@@ -88,7 +114,11 @@ export const workspaces = sqliteTable(
 	},
 	(table) => [
 		index("workspaces_project_id_idx").on(table.projectId),
-		index("workspaces_branch_idx").on(table.branch),
+		index("workspaces_upstream_ref_idx").on(
+			table.upstreamOwner,
+			table.upstreamRepo,
+			table.upstreamBranch,
+		),
 		index("workspaces_pull_request_id_idx").on(table.pullRequestId),
 	],
 );

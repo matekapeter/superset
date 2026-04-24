@@ -175,7 +175,7 @@ export async function destroyRuntime(runtime: RuntimeSession): Promise<void> {
 
 export interface LifecycleEvent {
 	sessionId: string;
-	eventType: "Start" | "Stop" | "PermissionRequest";
+	eventType: "Start" | "Stop" | "PermissionRequest" | "PendingQuestion";
 }
 
 /**
@@ -200,6 +200,13 @@ export function subscribeToSessionEvents(
 		}
 		if (isHarnessErrorEvent(event) || isHarnessWorkspaceErrorEvent(event)) {
 			runtime.lastErrorMessage = toRuntimeErrorMessage(event.error);
+			return;
+		}
+		if (isHarnessAskQuestionEvent(event)) {
+			onLifecycleEvent?.({
+				sessionId: runtime.sessionId,
+				eventType: "PendingQuestion",
+			});
 			return;
 		}
 		if (isHarnessSandboxAccessRequestEvent(event)) {
@@ -282,6 +289,16 @@ function isHarnessSandboxAccessRequestEvent(event: unknown): event is {
 		typeof event.questionId === "string" &&
 		typeof event.path === "string" &&
 		typeof event.reason === "string"
+	);
+}
+
+function isHarnessAskQuestionEvent(
+	event: unknown,
+): event is { type: "ask_question"; questionId: string } {
+	return (
+		isObjectRecord(event) &&
+		event.type === "ask_question" &&
+		typeof event.questionId === "string"
 	);
 }
 
@@ -488,7 +505,11 @@ export async function generateAndSetTitle(
 
 		const mode = runtime.harness.getCurrentMode();
 		const agent =
-			typeof mode.agent === "function" ? mode.agent({}) : mode.agent;
+			typeof mode.agent === "function"
+				? // Upstream types the agent factory against the schema type, but the
+					// runtime implementation receives the current state values.
+					mode.agent(runtime.harness.getState() as never)
+				: mode.agent;
 
 		const title = await generateTitleFromMessage({
 			agent,

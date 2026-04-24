@@ -12,10 +12,9 @@ import { createChatServiceRouter } from "./chat-service";
 import { createConfigRouter } from "./config";
 import { createExternalRouter } from "./external";
 import { createFilesystemRouter } from "./filesystem";
-import { createHostServiceManagerRouter } from "./host-service-manager";
-import { createHotkeysRouter } from "./hotkeys";
+import { createHostServiceCoordinatorRouter } from "./host-service-coordinator";
 import { createMenuRouter } from "./menu";
-import { createModelProvidersRouter } from "./model-providers";
+import { createMigrationRouter } from "./migration";
 import { createNotificationsRouter } from "./notifications";
 import { createPermissionsRouter } from "./permissions";
 import { createPortsRouter } from "./ports";
@@ -38,7 +37,6 @@ export const createAppRouter = (getWindow: () => BrowserWindow | null) => {
 		auth: createAuthRouter(),
 		autoUpdate: createAutoUpdateRouter(),
 		cache: createCacheRouter(),
-		modelProviders: createModelProvidersRouter(),
 		window: createWindowRouter(getWindow),
 		projects: createProjectsRouter(getWindow),
 		workspaces: createWorkspacesRouter(),
@@ -50,13 +48,13 @@ export const createAppRouter = (getWindow: () => BrowserWindow | null) => {
 		ports: createPortsRouter(),
 		resourceMetrics: createResourceMetricsRouter(),
 		menu: createMenuRouter(),
-		hotkeys: createHotkeysRouter(getWindow),
 		external: createExternalRouter(),
 		settings: createSettingsRouter(),
 		config: createConfigRouter(),
 		uiState: createUiStateRouter(),
 		ringtone: createRingtoneRouter(getWindow),
-		hostServiceManager: createHostServiceManagerRouter(),
+		hostServiceCoordinator: createHostServiceCoordinatorRouter(),
+		migration: createMigrationRouter(),
 	});
 };
 

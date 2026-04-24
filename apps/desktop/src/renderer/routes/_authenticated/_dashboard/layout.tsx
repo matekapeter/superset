@@ -1,16 +1,20 @@
-import { FEATURE_FLAGS } from "@superset/shared/constants";
 import {
 	createFileRoute,
 	Outlet,
 	useMatchRoute,
 	useNavigate,
 } from "@tanstack/react-router";
-import { useFeatureFlagEnabled } from "posthog-js/react";
+import { useState } from "react";
+import { useIsV2CloudEnabled } from "renderer/hooks/useIsV2CloudEnabled";
+import { useHotkey } from "renderer/hotkeys";
 import { electronTrpc } from "renderer/lib/electron-trpc";
 import { DashboardSidebar } from "renderer/routes/_authenticated/_dashboard/components/DashboardSidebar";
+import { V1MigrationSummaryModal } from "renderer/routes/_authenticated/components/V1MigrationSummaryModal";
+import { useDevSeedV2Sidebar } from "renderer/routes/_authenticated/hooks/useDevSeedV2Sidebar";
+import { useMigrateV1DataToV2 } from "renderer/routes/_authenticated/hooks/useMigrateV1DataToV2";
 import { ResizablePanel } from "renderer/screens/main/components/ResizablePanel";
 import { WorkspaceSidebar } from "renderer/screens/main/components/WorkspaceSidebar";
-import { useAppHotkey } from "renderer/stores/hotkeys";
+import { DeleteWorkspaceDialog } from "renderer/screens/main/components/WorkspaceSidebar/WorkspaceListItem/components";
 import { useOpenNewWorkspaceModal } from "renderer/stores/new-workspace-modal";
 import {
 	COLLAPSED_WORKSPACE_SIDEBAR_WIDTH,
@@ -18,6 +22,7 @@ import {
 	MAX_WORKSPACE_SIDEBAR_WIDTH,
 	useWorkspaceSidebarStore,
 } from "renderer/stores/workspace-sidebar-state";
+import { AddRepositoryModals } from "./components/AddRepositoryModals";
 import { TopBar } from "./components/TopBar";
 
 export const Route = createFileRoute("/_authenticated/_dashboard")({
@@ -27,8 +32,9 @@ export const Route = createFileRoute("/_authenticated/_dashboard")({
 function DashboardLayout() {
 	const navigate = useNavigate();
 	const openNewWorkspaceModal = useOpenNewWorkspaceModal();
-	const isV2CloudEnabled =
-		useFeatureFlagEnabled(FEATURE_FLAGS.V2_CLOUD) ?? false;
+	const { isV2CloudEnabled } = useIsV2CloudEnabled();
+	useDevSeedV2Sidebar();
+	useMigrateV1DataToV2();
 	// Get current workspace from route to pre-select project in new workspace modal
 	const matchRoute = useMatchRoute();
 	const currentWorkspaceMatch = matchRoute({
@@ -55,42 +61,37 @@ function DashboardLayout() {
 	} = useWorkspaceSidebarStore();
 
 	// Global hotkeys for dashboard
-	useAppHotkey(
-		"OPEN_SETTINGS",
-		() => navigate({ to: "/settings/account" }),
-		undefined,
-		[navigate],
+	useHotkey("OPEN_SETTINGS", () => navigate({ to: "/settings/account" }));
+	useHotkey("SHOW_HOTKEYS", () => navigate({ to: "/settings/keyboard" }));
+	useHotkey("TOGGLE_WORKSPACE_SIDEBAR", () => {
+		if (!isWorkspaceSidebarOpen) {
+			setWorkspaceSidebarOpen(true);
+		} else {
+			toggleWorkspaceSidebarCollapsed();
+		}
+	});
+	useHotkey("NEW_WORKSPACE", () =>
+		openNewWorkspaceModal(currentWorkspace?.projectId),
 	);
 
-	useAppHotkey(
-		"SHOW_HOTKEYS",
-		() => navigate({ to: "/settings/keyboard" }),
-		undefined,
-		[navigate],
-	);
+	const [deleteTarget, setDeleteTarget] = useState<{
+		workspaceId: string;
+		workspaceName: string;
+		workspaceType: "worktree" | "branch";
+	} | null>(null);
 
-	useAppHotkey(
-		"TOGGLE_WORKSPACE_SIDEBAR",
+	useHotkey(
+		"CLOSE_WORKSPACE",
 		() => {
-			if (!isWorkspaceSidebarOpen) {
-				setWorkspaceSidebarOpen(true);
-			} else {
-				toggleWorkspaceSidebarCollapsed();
+			if (currentWorkspaceId && currentWorkspace) {
+				setDeleteTarget({
+					workspaceId: currentWorkspaceId,
+					workspaceName: currentWorkspace.name,
+					workspaceType: currentWorkspace.type,
+				});
 			}
 		},
-		undefined,
-		[
-			isWorkspaceSidebarOpen,
-			setWorkspaceSidebarOpen,
-			toggleWorkspaceSidebarCollapsed,
-		],
-	);
-
-	useAppHotkey(
-		"NEW_WORKSPACE",
-		() => openNewWorkspaceModal(currentWorkspace?.projectId),
-		undefined,
-		[openNewWorkspaceModal, currentWorkspace?.projectId],
+		{ enabled: !!currentWorkspaceId },
 	);
 
 	return (
@@ -125,6 +126,19 @@ function DashboardLayout() {
 				<div className="flex flex-1 min-h-0 min-w-0">
 					<Outlet />
 				</div>
+				<AddRepositoryModals />
+				<V1MigrationSummaryModal />
+				{deleteTarget && (
+					<DeleteWorkspaceDialog
+						workspaceId={deleteTarget.workspaceId}
+						workspaceName={deleteTarget.workspaceName}
+						workspaceType={deleteTarget.workspaceType}
+						open={true}
+						onOpenChange={(open) => {
+							if (!open) setDeleteTarget(null);
+						}}
+					/>
+				)}
 			</div>
 		</div>
 	);

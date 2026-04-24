@@ -4,7 +4,7 @@ import {
 	type ResolvedAgentConfig,
 	renderTaskPromptTemplate,
 	validateTaskPromptTemplate,
-} from "shared/utils/agent-settings";
+} from "@superset/shared/agent-settings";
 import type { AgentEditableField } from "./agent-card.types";
 
 const SAMPLE_TASK = {
@@ -100,7 +100,9 @@ export function buildAgentFieldPatch({
 				};
 			}
 			if (!value.trim()) {
-				return { error: "Prompt command is required for terminal agents." };
+				return preset.source === "user"
+					? { patch: { promptCommand: "" } }
+					: { error: "Prompt command is required for terminal agents." };
 			}
 			return { patch: { promptCommand: value } };
 		case "promptCommandSuffix":
